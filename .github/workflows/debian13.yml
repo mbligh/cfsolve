@@ -1,0 +1,103 @@
+name: Debian 13 binary
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: debian13-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build on Debian 13 (amd64)
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:13
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      # A minimal Debian image does not contain git, ca-certificates, or a compiler.
+      - name: Install Debian 13 build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git build-essential cmake clang libclang-dev \
+            pkg-config perl nasm python3 file xz-utils
+
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install repository-pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          . "$HOME/.cargo/env"
+          rustup toolchain install
+          rustc --version
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Compile the challenge CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --bin challenge
+          file target/release/challenge
+          ldd target/release/challenge
+          target/release/challenge --help
+
+      - name: Package executable and required browser profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging dist
+          install -m 0755 target/release/challenge staging/challenge
+          cp -a profiles staging/profiles
+          cp README.md LICENSE staging/
+          test -r staging/profiles/safari-26-ios.json
+          tar -czf dist/cfsolve-debian13-amd64.tar.gz -C staging .
+          (cd dist && sha256sum cfsolve-debian13-amd64.tar.gz > SHA256SUMS)
+          tar -tzf dist/cfsolve-debian13-amd64.tar.gz | sed -n '1,25p'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cfsolve-debian13-amd64
+          path: |
+            dist/cfsolve-debian13-amd64.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cfsolve-debian13-amd64
+          path: dist
+      - name: Attach archive to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/cfsolve-debian13-amd64.tar.gz dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
