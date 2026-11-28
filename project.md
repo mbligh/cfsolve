@@ -38,3 +38,5 @@ git merge upstream/master
 ```
 
 After any upstream update, validate GitHub Actions builds again. Upstream's pinned Rust version and vendored dependencies may change.
+
+- 2026-11-27: Merge upstream `3d2f67ed56df29be6ceba1de60b7ab9077e554c8` (fix for new build), retaining the Debian 13 immutable binary release workflow. The APT package consumes the new release after it is published.
